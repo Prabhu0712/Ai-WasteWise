@@ -1,7 +1,6 @@
 import os
 import io
 import json
-import base64
 import requests
 
 import streamlit as st
@@ -16,21 +15,10 @@ from google.genai import types
 
 # ============================================================
 # AI WASTEWISE
-#
-# PRIMARY:
-#   Gemini Vision
-#
-# SECONDARY:
-#   Meta AI / Meta Model API
-#
-# FALLBACK:
-#   EfficientNetV2B0 30-class model
-#
-# EXPLAINABILITY:
-#   Grad-CAM
-#
-# KNOWLEDGE:
-#   RAG sustainability guidance
+# Gemini Vision = PRIMARY open-world identifier
+# EfficientNetV2B0 = SUPPORTING 30-class model
+# Grad-CAM = explains EfficientNet only
+# RAG = sustainability guidance
 # ============================================================
 
 st.set_page_config(
@@ -39,11 +27,6 @@ st.set_page_config(
     layout="centered"
 )
 
-
-# ============================================================
-# CONFIGURATION
-# ============================================================
-
 MODEL_URL = (
     "https://huggingface.co/Gastic0712/AI-Wastewise-Model/"
     "resolve/main/efficientnetv2b0_256.keras"
@@ -51,12 +34,7 @@ MODEL_URL = (
 
 MODEL_PATH = "efficientnetv2b0_256.keras"
 
-# Gemini
 GEMINI_MODEL = "gemini-3.8-flash"
-
-# Meta Model API
-META_MODEL = "muse-spark-1.3"
-META_API_URL = "https://api.meta.ai/v1/chat/completions"
 
 
 # ============================================================
@@ -97,12 +75,7 @@ classes = [
 ]
 
 
-# ============================================================
-# BROAD CATEGORIES
-# ============================================================
-
 broad = {
-
     "aerosol_cans": "Metal",
     "aluminum_food_cans": "Metal",
     "aluminum_soda_cans": "Metal",
@@ -148,240 +121,87 @@ broad = {
 # ============================================================
 
 knowledge = {
-
     "Electronic Waste": (
         "Electronics, plastics, metals and electronic components",
         "Take it to an authorized e-waste collection or electronics recycling facility.",
         "Repair, refurbish, donate or reuse it if functional.",
-        "Do not dispose of electronic devices with normal household waste."
+        "Do not dispose of electronic devices with normal household waste.",
     ),
 
     "Plastic": (
         "Plastic",
         "Clean where appropriate and use the correct plastic recycling stream.",
         "Reuse suitable products before disposal.",
-        "Reduce single-use plastics."
+        "Reduce single-use plastics.",
     ),
 
     "Paper": (
         "Paper",
         "Keep clean and dry and use paper recycling where available.",
         "Reuse for notes, packaging or crafts.",
-        "Keep wet and contaminated paper separate."
+        "Keep wet and contaminated paper separate.",
     ),
 
     "Cardboard": (
         "Cardboard",
         "Flatten clean and dry cardboard for recycling.",
         "Reuse boxes for storage or shipping.",
-        "Keep cardboard dry."
+        "Keep cardboard dry.",
     ),
 
     "Glass": (
         "Glass",
         "Use the appropriate glass recycling collection.",
         "Reuse suitable jars and bottles.",
-        "Handle broken glass carefully."
+        "Handle broken glass carefully.",
     ),
 
     "Metal": (
         "Metal",
         "Clean where appropriate and use metal recycling.",
         "Reuse suitable containers or recycle scrap metal.",
-        "Metals can often be recovered and recycled."
+        "Metals can often be recovered and recycled.",
     ),
 
     "Organic Waste": (
         "Biodegradable organic material",
         "Use composting or organic-waste collection where available.",
         "Compost suitable organic material.",
-        "Keep organic waste separate from recyclables."
+        "Keep organic waste separate from recyclables.",
     ),
 
     "Textile": (
         "Fabric or mixed textile material",
         "Use textile recycling or donation programs.",
         "Repair, donate or repurpose textiles.",
-        "Extend textile life before disposal."
+        "Extend textile life before disposal.",
     ),
 
     "Hazardous Waste": (
         "Potentially hazardous material",
         "Use an authorized hazardous-waste facility.",
         "Do not reuse unless specifically safe.",
-        "Do not mix hazardous waste with ordinary recycling."
+        "Do not mix hazardous waste with ordinary recycling.",
     ),
 
     "General Waste": (
         "Mixed or non-recyclable material",
         "Follow local municipal residual-waste guidelines.",
         "Consider repair or reuse first.",
-        "Separate recyclable components where possible."
+        "Separate recyclable components where possible.",
     ),
 
     "Other": (
         "Uncertain, mixed or construction material",
         "Check local waste-management guidelines and specialized collection requirements.",
         "Reuse or repurpose suitable material where safe.",
-        "Identify the material before choosing disposal."
+        "Identify the material before choosing disposal.",
     ),
 }
 
 
 # ============================================================
-# AI PROMPT
-# ============================================================
-
-AI_PROMPT = """
-You are the PRIMARY visual identification system for AI WasteWise.
-
-Identify the MAIN physical object or material visible in the image.
-
-IMPORTANT:
-Do NOT force an unknown object into the original 30-class taxonomy.
-
-Identify the actual object/material.
-
-Examples:
-
-keyboard, mouse, laptop, phone, charger, circuit board
--> Electronic Waste
-
-concrete, bricks, stones, rubble, masonry, construction debris
--> Other
-
-plastic bottle/container
--> Plastic
-
-glass bottle/jar
--> Glass
-
-newspaper/paper
--> Paper
-
-cardboard box
--> Cardboard
-
-food scraps, eggshells, tea waste
--> Organic Waste
-
-shoe, clothing, fabric
--> Textile
-
-metal can/object
--> Metal
-
-Allowed categories ONLY:
-
-Electronic Waste
-Plastic
-Paper
-Cardboard
-Glass
-Metal
-Organic Waste
-Textile
-Hazardous Waste
-General Waste
-Other
-
-Return ONLY valid JSON.
-
-Use exactly this structure:
-
-{
-    "object_name": "specific object or material",
-    "category": "one allowed category",
-    "material": "main material",
-    "reason": "short visual reason",
-    "disposal": "short disposal recommendation",
-    "reuse": "short reuse or repair recommendation",
-    "sustainability_tip": "short sustainability tip"
-}
-
-If uncertain, use category "Other".
-
-Do not add markdown.
-Do not add text outside JSON.
-"""
-
-
-ALLOWED_CATEGORIES = {
-    "Electronic Waste",
-    "Plastic",
-    "Paper",
-    "Cardboard",
-    "Glass",
-    "Metal",
-    "Organic Waste",
-    "Textile",
-    "Hazardous Waste",
-    "General Waste",
-    "Other"
-}
-
-
-# ============================================================
-# API KEY FUNCTIONS
-# ============================================================
-
-def get_secret(name):
-
-    try:
-        value = st.secrets.get(name, "")
-    except Exception:
-        value = ""
-
-    if not value:
-        value = os.getenv(name, "")
-
-    return str(value).strip()
-
-
-def get_gemini_key():
-    return get_secret("GEMINI_API_KEY")
-
-
-def get_meta_key():
-    """
-    Supports both names:
-
-    META_AI_API_KEY
-    MODEL_API_KEY
-
-    META_AI_API_KEY is preferred.
-    """
-
-    key = get_secret("META_AI_API_KEY")
-
-    if not key:
-        key = get_secret("MODEL_API_KEY")
-
-    return key
-
-
-# ============================================================
-# GEMINI CLIENT
-# ============================================================
-
-@st.cache_resource
-def get_gemini_client():
-
-    key = get_gemini_key()
-
-    if not key:
-        return None
-
-    try:
-        return genai.Client(
-            api_key=key
-        )
-    except Exception:
-        return None
-
-
-# ============================================================
-# EFFICIENTNET MODEL
+# MODEL LOADING
 # ============================================================
 
 @st.cache_resource
@@ -397,26 +217,15 @@ def load_model():
 
         response.raise_for_status()
 
-        with open(
-            MODEL_PATH,
-            "wb"
-        ) as f:
+        with open(MODEL_PATH, "wb") as f:
 
-            for chunk in response.iter_content(
-                1024 * 1024
-            ):
+            for chunk in response.iter_content(1024 * 1024):
 
                 if chunk:
                     f.write(chunk)
 
-    return tf.keras.models.load_model(
-        MODEL_PATH
-    )
+    return tf.keras.models.load_model(MODEL_PATH)
 
-
-# ============================================================
-# GRAD-CAM MODEL
-# ============================================================
 
 @st.cache_resource
 def build_gradcam():
@@ -426,18 +235,12 @@ def build_gradcam():
     old_backbone = next(
         layer
         for layer in trained.layers
-        if isinstance(
-            layer,
-            tf.keras.Model
-        )
+        if isinstance(layer, tf.keras.Model)
     )
 
     backbone = tf.keras.applications.EfficientNetV2B0(
-
         input_shape=(256, 256, 3),
-
         include_top=False,
-
         weights=None
     )
 
@@ -447,30 +250,19 @@ def build_gradcam():
 
     dense = next(
         layer
-        for layer in reversed(
-            trained.layers
-        )
-        if isinstance(
-            layer,
-            tf.keras.layers.Dense
-        )
+        for layer in reversed(trained.layers)
+        if isinstance(layer, tf.keras.layers.Dense)
     )
 
     return backbone, dense
 
-
-# ============================================================
-# EFFICIENTNET PREDICTION
-# ============================================================
 
 def efficientnet_prediction(image):
 
     backbone, dense = build_gradcam()
 
     arr = np.asarray(
-        image.resize(
-            (256, 256)
-        ),
+        image.resize((256, 256)),
         dtype=np.float32
     )
 
@@ -486,9 +278,7 @@ def efficientnet_prediction(image):
             training=False
         )
 
-        tape.watch(
-            features
-        )
+        tape.watch(features)
 
         pooled = tf.reduce_mean(
             features,
@@ -504,10 +294,7 @@ def efficientnet_prediction(image):
             output_type=tf.int32
         )
 
-        score = output[
-            :,
-            class_id
-        ]
+        score = output[:, class_id]
 
     gradients = tape.gradient(
         score,
@@ -520,8 +307,7 @@ def efficientnet_prediction(image):
     )
 
     cam = tf.reduce_sum(
-        weights[:, None, None, :]
-        * features,
+        weights[:, None, None, :] * features,
         axis=-1
     )
 
@@ -531,8 +317,7 @@ def efficientnet_prediction(image):
     )
 
     cam = cam / (
-        tf.reduce_max(cam)
-        + 1e-8
+        tf.reduce_max(cam) + 1e-8
     )
 
     cam = tf.image.resize(
@@ -548,56 +333,134 @@ def efficientnet_prediction(image):
 
     return (
         classes[predicted_id],
-        float(
-            probabilities[predicted_id]
-        ),
+        float(probabilities[predicted_id]),
         cam
     )
 
 
 # ============================================================
-# GEMINI ANALYSIS
+# GEMINI
 # ============================================================
 
-def analyze_with_gemini(image):
+def get_gemini_api_key():
+
+    try:
+        key = st.secrets.get(
+            "GEMINI_API_KEY",
+            ""
+        )
+    except Exception:
+        key = ""
+
+    if not key:
+        key = os.getenv(
+            "GEMINI_API_KEY",
+            ""
+        )
+
+    return str(key).strip()
+
+
+@st.cache_resource
+def get_gemini_client():
+
+    key = get_gemini_api_key()
+
+    if not key:
+        return None
+
+    return genai.Client(
+        api_key=key
+    )
+
+
+def gemini_analysis(image):
 
     client = get_gemini_client()
 
     if client is None:
-        return None
+
+        return (
+            None,
+            "GEMINI_API_KEY is missing from Streamlit Secrets."
+        )
 
     try:
 
         buffer = io.BytesIO()
 
-        image.convert(
-            "RGB"
-        ).save(
+        image.convert("RGB").save(
             buffer,
             format="JPEG",
             quality=90
         )
 
-        image_bytes = (
-            buffer.getvalue()
-        )
+        image_bytes = buffer.getvalue()
+
+        prompt = """
+You are the PRIMARY visual identification system for AI WasteWise.
+
+Identify the MAIN physical object or material visible in the image.
+
+IMPORTANT:
+- Do NOT force an unknown object into the original 30-class taxonomy.
+- Identify the actual object/material visible.
+- Keyboard, mouse, laptop, phone, charger or circuit board
+  -> Electronic Waste.
+- Concrete, bricks, stones, rubble, masonry or construction debris
+  -> Other.
+- Plastic bottle/container -> Plastic.
+- Glass bottle/jar -> Glass.
+- Newspaper/paper -> Paper.
+- Cardboard box -> Cardboard.
+- Food scraps/organic material -> Organic Waste.
+- Shoe/clothing/fabric -> Textile.
+- Metal can/object -> Metal.
+
+Allowed categories ONLY:
+
+Electronic Waste
+Plastic
+Paper
+Cardboard
+Glass
+Metal
+Organic Waste
+Textile
+Hazardous Waste
+General Waste
+Other
+
+Return ONLY valid JSON:
+
+{
+  "object_name": "specific object or material",
+  "category": "one allowed category",
+  "material": "main material",
+  "reason": "short visual reason",
+  "disposal": "short disposal recommendation",
+  "reuse": "short reuse or repair recommendation",
+  "sustainability_tip": "short sustainability tip"
+}
+
+If uncertain, use category "Other".
+Do not add markdown.
+Do not add text outside JSON.
+"""
 
         response = client.models.generate_content(
 
             model=GEMINI_MODEL,
 
             contents=[
-
                 types.Part.from_bytes(
                     data=image_bytes,
                     mime_type="image/jpeg"
                 ),
-
-                AI_PROMPT
+                prompt
             ],
 
             config=types.GenerateContentConfig(
-
                 response_mime_type="application/json"
             )
         )
@@ -607,18 +470,36 @@ def analyze_with_gemini(image):
         ).strip()
 
         if not text:
-            return None
+
+            return (
+                None,
+                "Gemini returned an empty response."
+            )
 
         result = json.loads(
             text
         )
+
+        allowed_categories = {
+            "Electronic Waste",
+            "Plastic",
+            "Paper",
+            "Cardboard",
+            "Glass",
+            "Metal",
+            "Organic Waste",
+            "Textile",
+            "Hazardous Waste",
+            "General Waste",
+            "Other"
+        }
 
         category = result.get(
             "category",
             "Other"
         )
 
-        if category not in ALLOWED_CATEGORIES:
+        if category not in allowed_categories:
 
             category = "Other"
 
@@ -633,7 +514,7 @@ def analyze_with_gemini(image):
                 "Unknown",
 
             "reason":
-                "Visual identification.",
+                "Visual identification by Gemini.",
 
             "disposal":
                 knowledge["Other"][1],
@@ -645,283 +526,24 @@ def analyze_with_gemini(image):
                 knowledge["Other"][3]
         }
 
-        for key, default in defaults.items():
+        for key, default_value in defaults.items():
 
             if not result.get(key):
 
-                result[key] = default
+                result[key] = default_value
 
-        return result
+        return result, None
 
-    except Exception:
+    except Exception as error:
 
-        # IMPORTANT:
-        # Do not expose API errors to the user.
-        return None
+        return (
+            None,
+            f"{type(error).__name__}: {error}"
+        )
 
 
 # ============================================================
-# META AI / META MODEL API ANALYSIS
-# ============================================================
-
-def analyze_with_meta(image):
-
-    api_key = get_meta_key()
-
-    if not api_key:
-        return None
-
-    try:
-
-        buffer = io.BytesIO()
-
-        image.convert(
-            "RGB"
-        ).save(
-            buffer,
-            format="JPEG",
-            quality=90
-        )
-
-        image_bytes = (
-            buffer.getvalue()
-        )
-
-        encoded_image = base64.b64encode(
-            image_bytes
-        ).decode("utf-8")
-
-        image_data_url = (
-            "data:image/jpeg;base64,"
-            + encoded_image
-        )
-
-        payload = {
-
-            "model": META_MODEL,
-
-            "messages": [
-
-                {
-                    "role": "user",
-
-                    "content": [
-
-                        {
-                            "type": "text",
-                            "text": AI_PROMPT
-                        },
-
-                        {
-                            "type": "image_url",
-
-                            "image_url": {
-
-                                "url":
-                                image_data_url
-                            }
-                        }
-                    ]
-                }
-            ]
-        }
-
-        response = requests.post(
-
-            META_API_URL,
-
-            headers={
-
-                "Authorization":
-                f"Bearer {api_key}",
-
-                "Content-Type":
-                "application/json"
-            },
-
-            json=payload,
-
-            timeout=120
-        )
-
-        if response.status_code != 200:
-
-            return None
-
-        data = response.json()
-
-        choices = data.get(
-            "choices",
-            []
-        )
-
-        if not choices:
-            return None
-
-        message = choices[0].get(
-            "message",
-            {}
-        )
-
-        text = message.get(
-            "content",
-            ""
-        )
-
-        if not text:
-            return None
-
-        text = text.strip()
-
-        # Remove markdown JSON fences if returned.
-        if text.startswith(
-            "```json"
-        ):
-
-            text = text[
-                7:
-            ].strip()
-
-        if text.startswith(
-            "```"
-        ):
-
-            text = text[
-                3:
-            ].strip()
-
-        if text.endswith(
-            "```"
-        ):
-
-            text = text[
-                :-3
-            ].strip()
-
-        result = json.loads(
-            text
-        )
-
-        category = result.get(
-            "category",
-            "Other"
-        )
-
-        if category not in ALLOWED_CATEGORIES:
-
-            category = "Other"
-
-        result["category"] = category
-
-        defaults = {
-
-            "object_name":
-                "Unknown object",
-
-            "material":
-                "Unknown",
-
-            "reason":
-                "Visual identification.",
-
-            "disposal":
-                knowledge["Other"][1],
-
-            "reuse":
-                knowledge["Other"][2],
-
-            "sustainability_tip":
-                knowledge["Other"][3]
-        }
-
-        for key, default in defaults.items():
-
-            if not result.get(key):
-
-                result[key] = default
-
-        return result
-
-    except Exception:
-
-        # IMPORTANT:
-        # Do not expose Meta API errors to the user.
-        return None
-
-
-# ============================================================
-# HYBRID AI ROUTER
-# ============================================================
-
-def hybrid_ai_analysis(image):
-
-    """
-    Priority:
-
-    1. Gemini
-    2. Meta AI
-    3. None
-
-    If Gemini key does not exist:
-        Meta is tried.
-
-    If Gemini exists but fails:
-        Meta is tried.
-
-    If Meta also fails:
-        EfficientNet fallback is used.
-
-    No API-key error is shown to the user.
-    """
-
-    # --------------------------------------------------------
-    # FIRST: GEMINI
-    # --------------------------------------------------------
-
-    if get_gemini_key():
-
-        result = analyze_with_gemini(
-            image
-        )
-
-        if result:
-
-            return (
-                result,
-                "Gemini Vision"
-            )
-
-
-    # --------------------------------------------------------
-    # SECOND: META AI
-    # --------------------------------------------------------
-
-    if get_meta_key():
-
-        result = analyze_with_meta(
-            image
-        )
-
-        if result:
-
-            return (
-                result,
-                "Meta AI"
-            )
-
-
-    # --------------------------------------------------------
-    # NO EXTERNAL AI AVAILABLE
-    # --------------------------------------------------------
-
-    return (
-        None,
-        None
-    )
-
-
-# ============================================================
-# STREAMLIT UI
+# UI
 # ============================================================
 
 st.title(
@@ -929,23 +551,20 @@ st.title(
 )
 
 st.write(
-    "Hybrid AI waste identification using "
-    "Gemini Vision, Meta AI, EfficientNetV2B0, "
-    "Grad-CAM and RAG."
+    "Hybrid AI waste identification using Gemini Vision, "
+    "EfficientNetV2B0, Grad-CAM and RAG."
 )
 
 st.caption(
-    "AI Vision identifies the object. "
-    "EfficientNetV2B0 provides supporting custom ML analysis."
+    "Gemini Vision is the primary open-world identifier. "
+    "EfficientNetV2B0 provides supporting 30-class ML analysis."
 )
 
 st.divider()
 
 
 uploaded = st.file_uploader(
-
     "📷 Upload an image",
-
     type=[
         "jpg",
         "jpeg",
@@ -967,56 +586,49 @@ if uploaded:
         use_container_width=True
     )
 
-
     if st.button(
-
         "🔍 Analyze Waste",
-
         type="primary",
-
         use_container_width=True
     ):
 
         with st.spinner(
-            "Analyzing image..."
+            "Analyzing image with Gemini Vision and EfficientNetV2B0..."
         ):
 
-            # Custom model
             ml_label, ml_conf, cam = (
                 efficientnet_prediction(
                     image
                 )
             )
 
-            # External AI router
-            ai_result, ai_source = (
-                hybrid_ai_analysis(
+            gemini, gemini_error = (
+                gemini_analysis(
                     image
                 )
             )
 
 
         # ====================================================
-        # FINAL IDENTIFICATION
+        # PRIMARY RESULT
         # ====================================================
 
-        if ai_result:
+        if gemini:
 
-            category = ai_result.get(
+            category = gemini.get(
                 "category",
                 "Other"
             )
 
-            object_name = ai_result.get(
+            object_name = gemini.get(
                 "object_name",
                 "Unknown object"
             )
 
-            source = ai_source
+            source = "Gemini Vision"
 
         else:
 
-            # Silent fallback.
             category = broad.get(
                 ml_label,
                 "Other"
@@ -1024,21 +636,34 @@ if uploaded:
 
             object_name = (
                 ml_label
-                .replace(
-                    "_",
-                    " "
-                )
+                .replace("_", " ")
                 .title()
             )
 
             source = (
-                "EfficientNetV2B0"
+                "EfficientNetV2B0 fallback"
             )
 
+            st.warning(
+                "Gemini Vision was unavailable. "
+                "The custom EfficientNetV2B0 model is being used as fallback."
+            )
 
-        # ====================================================
-        # MAIN RESULT
-        # ====================================================
+            with st.expander(
+                "🔧 Gemini diagnostic information"
+            ):
+
+                st.code(
+                    gemini_error or
+                    "Unknown Gemini error"
+                )
+
+                st.write(
+                    "Check that GEMINI_API_KEY is correctly "
+                    "configured in Streamlit Secrets and "
+                    "that the Gemini API is enabled."
+                )
+
 
         st.success(
             f"♻️ Waste Category: {category}"
@@ -1054,34 +679,34 @@ if uploaded:
 
 
         # ====================================================
-        # AI VERIFICATION
+        # GEMINI RESULT
         # ====================================================
 
-        if ai_result:
+        if gemini:
 
             with st.expander(
-                f"✨ {ai_source} Visual Verification",
+                "✨ Gemini Visual Verification",
                 expanded=True
             ):
 
                 st.write(
                     f"**Object:** "
-                    f"{ai_result['object_name']}"
+                    f"{gemini['object_name']}"
                 )
 
                 st.write(
                     f"**Category:** "
-                    f"{ai_result['category']}"
+                    f"{gemini['category']}"
                 )
 
                 st.write(
                     f"**Material:** "
-                    f"{ai_result['material']}"
+                    f"{gemini['material']}"
                 )
 
                 st.write(
                     f"**Why:** "
-                    f"{ai_result['reason']}"
+                    f"{gemini['reason']}"
                 )
 
 
@@ -1096,10 +721,7 @@ if uploaded:
             st.write(
                 "**30-Class Prediction:** "
                 + ml_label
-                .replace(
-                    "_",
-                    " "
-                )
+                .replace("_", " ")
                 .title()
             )
 
@@ -1117,16 +739,10 @@ if uploaded:
             )
 
             st.caption(
-                "This is the independent custom "
-                "30-class model prediction. "
-                "It does not override the external "
-                "AI visual identification."
+                "This is the independent custom 30-class "
+                "model prediction and does not override Gemini."
             )
 
-
-            # =================================================
-            # GRAD-CAM
-            # =================================================
 
             st.subheader(
                 "🔥 Grad-CAM"
@@ -1148,9 +764,7 @@ if uploaded:
                 alpha=0.42
             )
 
-            ax.axis(
-                "off"
-            )
+            ax.axis("off")
 
             ax.set_title(
                 "EfficientNetV2B0 attention"
@@ -1161,48 +775,45 @@ if uploaded:
                 use_container_width=True
             )
 
-            plt.close(
-                fig
-            )
+            plt.close(fig)
 
             st.caption(
-                "Grad-CAM explains the EfficientNetV2B0 "
-                "prediction only."
+                "Grad-CAM explains the EfficientNet "
+                "prediction only, not the Gemini result."
             )
 
 
         # ====================================================
-        # SUSTAINABILITY GUIDANCE
+        # RAG / SUSTAINABILITY
         # ====================================================
 
         st.subheader(
             "🌱 Sustainability Guidance"
         )
 
-
-        if ai_result:
+        if gemini:
 
             info = knowledge.get(
                 category,
                 knowledge["Other"]
             )
 
-            material = ai_result.get(
+            material = gemini.get(
                 "material",
                 info[0]
             )
 
-            disposal = ai_result.get(
+            disposal = gemini.get(
                 "disposal",
                 info[1]
             )
 
-            reuse = ai_result.get(
+            reuse = gemini.get(
                 "reuse",
                 info[2]
             )
 
-            tip = ai_result.get(
+            tip = gemini.get(
                 "sustainability_tip",
                 info[3]
             )
@@ -1244,49 +855,23 @@ if uploaded:
             "🤖 AI WasteWise Pipeline"
         )
 
-        if ai_source == "Gemini Vision":
-
-            st.write(
-                "📷 Image → "
-                "✨ Gemini Vision → "
-                "🧠 EfficientNetV2B0 → "
-                "🔥 Grad-CAM → "
-                "📚 RAG → "
-                "♻️ Guidance"
-            )
-
-        elif ai_source == "Meta AI":
-
-            st.write(
-                "📷 Image → "
-                "✨ Meta AI → "
-                "🧠 EfficientNetV2B0 → "
-                "🔥 Grad-CAM → "
-                "📚 RAG → "
-                "♻️ Guidance"
-            )
-
-        else:
-
-            st.write(
-                "📷 Image → "
-                "🧠 EfficientNetV2B0 → "
-                "🔥 Grad-CAM → "
-                "📚 RAG → "
-                "♻️ Guidance"
-            )
-
-
-        st.info(
-            "AI guidance is informational. "
-            "Follow local waste-management and "
-            "e-waste regulations for final disposal."
+        st.write(
+            "📷 Image → "
+            "✨ Gemini Vision + "
+            "🧠 EfficientNetV2B0 → "
+            "🔥 Grad-CAM → "
+            "📚 RAG → "
+            "♻️ Guidance"
         )
 
+        st.info(
+            "AI guidance is informational. Follow local "
+            "waste-management and e-waste regulations "
+            "for final disposal."
+        )
 
 else:
 
     st.info(
-        "👆 Upload a waste or household-object image "
-        "to begin."
+        "👆 Upload a waste or household-object image to begin."
     )
