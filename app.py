@@ -1,13 +1,30 @@
 import os
+import io
+import json
 import requests
 import streamlit as st
 import tensorflow as tf
 import numpy as np
 import matplotlib.pyplot as plt
 
+from PIL import Image
+from google import genai
+from google.genai import types
+
 
 # =========================================================
-# CONFIGURATION
+# PAGE CONFIG
+# =========================================================
+
+st.set_page_config(
+    page_title="AI WasteWise",
+    page_icon="♻️",
+    layout="centered"
+)
+
+
+# =========================================================
+# MODEL CONFIG
 # =========================================================
 
 MODEL_URL = (
@@ -19,7 +36,7 @@ MODEL_PATH = "efficientnetv2b0_256.keras"
 
 
 # =========================================================
-# CLASS NAMES
+# 30 TRAINED CLASSES
 # =========================================================
 
 classes = [
@@ -62,199 +79,235 @@ classes = [
 
 knowledge = {
 
-    "steel_food_cans": (
-        "Steel/metal",
-        "Empty and rinse, then place in recyclable metal waste.",
-        "Reuse for storage or planters.",
-        "Rinsing removes residue and improves recyclability."
-    ),
+    "Electronic Waste": {
+        "material": "Electronics, plastics, metals and electronic components",
+        "disposal": (
+            "Take the item to an authorized e-waste collection "
+            "or electronics recycling facility."
+        ),
+        "reuse": (
+            "Repair, refurbish, donate or reuse the device "
+            "if it is still functional."
+        ),
+        "tip": (
+            "Do not dispose of electronic devices with normal "
+            "household waste."
+        )
+    },
 
-    "aluminum_food_cans": (
-        "Aluminum",
-        "Rinse and place with recyclable metal waste.",
-        "Reuse for crafts or storage.",
-        "Aluminum can be recycled repeatedly."
-    ),
+    "Plastic": {
+        "material": "Plastic",
+        "disposal": (
+            "Clean the item where appropriate and place it in "
+            "the correct plastic recycling stream if accepted locally."
+        ),
+        "reuse": (
+            "Reuse suitable containers and products before disposal."
+        ),
+        "tip": (
+            "Reduce single-use plastics and prefer reusable alternatives."
+        )
+    },
 
-    "aluminum_soda_cans": (
-        "Aluminum",
-        "Empty, rinse and place in recyclable metal waste.",
-        "Reuse for crafts.",
-        "Avoid putting aluminum cans in general waste."
-    ),
+    "Paper": {
+        "material": "Paper",
+        "disposal": (
+            "Keep the material clean and dry and place it in "
+            "paper recycling where available."
+        ),
+        "reuse": (
+            "Reuse paper for notes, packaging or craft purposes."
+        ),
+        "tip": (
+            "Avoid mixing wet or food-contaminated paper with "
+            "clean recyclable paper."
+        )
+    },
 
-    "plastic_water_bottles": (
-        "PET plastic",
-        "Empty and place in appropriate plastic recycling.",
-        "Reuse temporarily for non-food purposes.",
-        "Recycling is preferable to single-use disposal."
-    ),
+    "Cardboard": {
+        "material": "Cardboard",
+        "disposal": (
+            "Flatten clean and dry cardboard before placing it "
+            "in cardboard recycling."
+        ),
+        "reuse": (
+            "Reuse boxes for storage, shipping or organization."
+        ),
+        "tip": "Keep cardboard dry and free from food contamination."
+    },
 
-    "plastic_soda_bottles": (
-        "PET plastic",
-        "Empty and place in plastic recycling.",
-        "Reuse for storage or crafts.",
-        "Keep bottles separate from contaminated waste."
-    ),
+    "Glass": {
+        "material": "Glass",
+        "disposal": (
+            "Place suitable glass items in the appropriate "
+            "glass recycling collection."
+        ),
+        "reuse": (
+            "Jars and bottles can sometimes be reused for storage."
+        ),
+        "tip": "Handle broken glass carefully."
+    },
 
-    "plastic_food_containers": (
-        "Plastic",
-        "Empty and clean before plastic recycling.",
-        "Reuse for storage when appropriate.",
-        "Heavily contaminated plastic may not be recyclable."
-    ),
+    "Metal": {
+        "material": "Metal",
+        "disposal": (
+            "Clean the item where appropriate and place it in "
+            "metal recycling."
+        ),
+        "reuse": (
+            "Reuse suitable containers or send scrap metal "
+            "for recycling."
+        ),
+        "tip": (
+            "Metals can often be recovered and recycled instead "
+            "of being sent to landfill."
+        )
+    },
 
-    "cardboard_boxes": (
-        "Cardboard",
-        "Flatten and place with dry paper/cardboard recycling.",
-        "Reuse for packaging and storage.",
-        "Keep cardboard dry and clean."
-    ),
+    "Organic Waste": {
+        "material": "Biodegradable organic material",
+        "disposal": (
+            "Use composting or an organic-waste collection "
+            "system where available."
+        ),
+        "reuse": (
+            "Suitable organic material can be composted."
+        ),
+        "tip": (
+            "Separating organic waste reduces contamination "
+            "of recyclable materials."
+        )
+    },
 
-    "cardboard_packaging": (
-        "Paper/cardboard",
-        "Place clean, dry packaging with paper/cardboard recycling.",
-        "Reuse as packaging material.",
-        "Remove food contamination before recycling."
-    ),
+    "Textile": {
+        "material": "Fabric or mixed textile material",
+        "disposal": (
+            "Use textile recycling or donation programs where available."
+        ),
+        "reuse": (
+            "Repair, donate or repurpose usable clothing and textiles."
+        ),
+        "tip": "Extend the useful life of textiles before disposal."
+    },
 
-    "glass_beverage_bottles": (
-        "Glass",
-        "Place in appropriate glass recycling.",
-        "Reuse as containers or decorative items.",
-        "Handle broken glass carefully."
-    ),
+    "Hazardous Waste": {
+        "material": "Potentially hazardous material",
+        "disposal": (
+            "Use an authorized hazardous-waste collection facility "
+            "and follow local regulations."
+        ),
+        "reuse": "Do not reuse hazardous material unless specifically safe.",
+        "tip": (
+            "Do not mix hazardous waste with ordinary household recycling."
+        )
+    },
 
-    "glass_food_jars": (
-        "Glass",
-        "Empty and rinse before glass recycling.",
-        "Reuse for household storage.",
-        "Separate lids if required locally."
-    ),
+    "General Waste": {
+        "material": "Mixed or non-recyclable material",
+        "disposal": (
+            "Follow local municipal guidelines for residual/general waste."
+        ),
+        "reuse": (
+            "Consider repair or reuse before disposal where appropriate."
+        ),
+        "tip": (
+            "Check whether individual components can be separated "
+            "for recycling."
+        )
+    },
 
-    "paper_cups": (
-        "Paper with possible plastic coating",
-        "Check local rules for coated cups.",
-        "Generally single-use.",
-        "Do not assume all paper cups are recyclable."
-    ),
-
-    "plastic_trash_bags": (
-        "Plastic film",
-        "Use plastic-film collection where available.",
-        "Reuse for waste collection.",
-        "Keep recyclable materials separate."
-    ),
-
-    "plastic_straws": (
-        "Plastic",
-        "Follow local plastic-waste guidelines.",
-        "Generally difficult to reuse safely.",
-        "Consider reusable alternatives."
-    ),
-
-    "shoes": (
-        "Mixed materials",
-        "Donate or use footwear/textile collection where available.",
-        "Donate or repair if usable.",
-        "Avoid sending usable footwear directly to landfill."
-    ),
-
-    "food_waste": (
-        "Organic matter",
-        "Place in organic/compost waste where available.",
-        "Compost suitable food scraps.",
-        "Keep organic waste separate from recyclables."
-    ),
-
-    "coffee_grounds": (
-        "Organic matter",
-        "Add to compost or organic waste where permitted.",
-        "Compost or use as soil amendment.",
-        "Keep separate from dry recyclables."
-    ),
-
-    "eggshells": (
-        "Organic/mineral material",
-        "Place in compost/organic waste where supported.",
-        "Crush and add to compost.",
-        "Clean shells before reuse."
-    ),
-
-    "tea_bags": (
-        "Organic material plus possible synthetic components",
-        "Check bag material before composting.",
-        "Compost tea leaves when suitable.",
-        "Some tea bags contain plastic fibers."
-    ),
-
-    "disposable_plastic_cutlery": (
-        "Plastic",
-        "Follow local plastic-waste guidelines.",
-        "Limited reuse only when appropriate.",
-        "Reusable cutlery reduces plastic waste."
-    ),
-
-    "styrofoam_cups": (
-        "Expanded polystyrene",
-        "Check whether local facilities accept polystyrene.",
-        "Generally single-use.",
-        "Check local collection rules."
-    ),
-
-    "styrofoam_food_containers": (
-        "Expanded polystyrene",
-        "Check local recycling/disposal facilities.",
-        "Generally single-use.",
-        "Reduce use where reusable containers are available."
-    )
+    "Other": {
+        "material": "Uncertain or mixed material",
+        "disposal": (
+            "Check local waste-management guidelines before disposal."
+        ),
+        "reuse": (
+            "Consider repair, donation or reuse where safe."
+        ),
+        "tip": (
+            "Identify the material before choosing a disposal stream."
+        )
+    }
 }
 
 
 # =========================================================
-# DOWNLOAD MODEL
+# MAP TRAINED CLASSES TO BROAD CATEGORIES
 # =========================================================
 
-@st.cache_resource
-def download_model():
+broad_mapping = {
 
-    if not os.path.exists(MODEL_PATH):
+    "aerosol_cans": "Metal",
+    "aluminum_food_cans": "Metal",
+    "aluminum_soda_cans": "Metal",
+    "steel_food_cans": "Metal",
 
-        with st.spinner("Downloading AI model..."):
+    "cardboard_boxes": "Cardboard",
+    "cardboard_packaging": "Cardboard",
 
-            response = requests.get(
-                MODEL_URL,
-                stream=True,
-                timeout=300
-            )
+    "clothing": "Textile",
+    "shoes": "Textile",
 
-            response.raise_for_status()
+    "coffee_grounds": "Organic Waste",
+    "eggshells": "Organic Waste",
+    "food_waste": "Organic Waste",
+    "tea_bags": "Organic Waste",
 
-            with open(MODEL_PATH, "wb") as file:
+    "glass_beverage_bottles": "Glass",
+    "glass_cosmetic_containers": "Glass",
+    "glass_food_jars": "Glass",
 
-                for chunk in response.iter_content(
-                    chunk_size=1024 * 1024
-                ):
-                    if chunk:
-                        file.write(chunk)
+    "magazines": "Paper",
+    "newspaper": "Paper",
+    "office_paper": "Paper",
+    "paper_cups": "Paper",
 
-    return MODEL_PATH
+    "disposable_plastic_cutlery": "Plastic",
+    "plastic_cup_lids": "Plastic",
+    "plastic_detergent_bottles": "Plastic",
+    "plastic_food_containers": "Plastic",
+    "plastic_shopping_bags": "Plastic",
+    "plastic_soda_bottles": "Plastic",
+    "plastic_straws": "Plastic",
+    "plastic_trash_bags": "Plastic",
+    "plastic_water_bottles": "Plastic",
+
+    "styrofoam_cups": "Plastic",
+    "styrofoam_food_containers": "Plastic"
+}
 
 
 # =========================================================
-# LOAD MODEL
+# DOWNLOAD + LOAD EFFICIENTNET MODEL
 # =========================================================
 
 @st.cache_resource
 def load_model():
 
-    model_path = download_model()
+    if not os.path.exists(MODEL_PATH):
 
-    return tf.keras.models.load_model(model_path)
+        response = requests.get(
+            MODEL_URL,
+            stream=True,
+            timeout=300
+        )
+
+        response.raise_for_status()
+
+        with open(MODEL_PATH, "wb") as f:
+
+            for chunk in response.iter_content(
+                chunk_size=1024 * 1024
+            ):
+
+                if chunk:
+                    f.write(chunk)
+
+    return tf.keras.models.load_model(MODEL_PATH)
 
 
 # =========================================================
-# BUILD GRAD-CAM BACKBONE
+# BUILD GRAD-CAM
 # =========================================================
 
 @st.cache_resource
@@ -288,16 +341,24 @@ def build_gradcam():
 
 
 # =========================================================
-# PREDICTION + GRAD-CAM
+# CUSTOM MODEL PREDICTION + GRAD-CAM
 # =========================================================
 
-def predict_and_gradcam(image):
+def efficientnet_prediction(image):
 
     backbone, dense_layer = build_gradcam()
 
-    image_array = tf.keras.utils.img_to_array(image)
+    resized = image.resize((256, 256))
 
-    x = tf.expand_dims(image_array, 0)
+    image_array = np.array(
+        resized,
+        dtype=np.float32
+    )
+
+    x = tf.expand_dims(
+        image_array,
+        axis=0
+    )
 
     with tf.GradientTape() as tape:
 
@@ -313,13 +374,13 @@ def predict_and_gradcam(image):
             axis=[1, 2]
         )
 
-        logits = dense_layer(pooled)
+        output = dense_layer(pooled)
 
         class_id = tf.argmax(
-            logits[0]
+            output[0]
         )
 
-        score = logits[:, class_id]
+        score = output[:, class_id]
 
     gradients = tape.gradient(
         score,
@@ -350,30 +411,211 @@ def predict_and_gradcam(image):
         (256, 256)
     ).numpy().squeeze()
 
-    probabilities = tf.nn.softmax(
-        logits
-    )[0].numpy()
+    # Dense already uses softmax in your trained model.
+    probs = output[0].numpy()
+
+    class_id = int(class_id)
 
     confidence = float(
-        probabilities[int(class_id)]
+        probs[class_id]
     )
 
     return (
-        int(class_id),
+        classes[class_id],
         confidence,
         cam
     )
 
 
 # =========================================================
-# PAGE CONFIG
+# GEMINI CLIENT
 # =========================================================
 
-st.set_page_config(
-    page_title="AI WasteWise",
-    page_icon="♻️",
-    layout="centered"
-)
+@st.cache_resource
+def get_gemini_client():
+
+    api_key = st.secrets.get(
+        "GEMINI_API_KEY",
+        None
+    )
+
+    if not api_key:
+        return None
+
+    return genai.Client(
+        api_key=api_key
+    )
+
+
+# =========================================================
+# GEMINI VISUAL WASTE ANALYSIS
+# =========================================================
+
+def gemini_analysis(image):
+
+    client = get_gemini_client()
+
+    if client is None:
+        return None
+
+    buffer = io.BytesIO()
+
+    image.convert("RGB").save(
+        buffer,
+        format="JPEG",
+        quality=90
+    )
+
+    image_bytes = buffer.getvalue()
+
+    prompt = """
+You are the visual waste-classification component of AI WasteWise.
+
+Analyze the MAIN PHYSICAL OBJECT visible in this image.
+
+Do not force the object into a recycling category if it does not belong there.
+
+For example:
+- keyboard, mouse, charger, laptop, phone, circuit board or electronic device
+  should be Electronic Waste.
+- food scraps should be Organic Waste.
+- bottles should be categorized based on their visible material.
+- clothing should be Textile.
+
+Allowed broad waste categories are EXACTLY:
+
+Electronic Waste
+Plastic
+Paper
+Cardboard
+Glass
+Metal
+Organic Waste
+Textile
+Hazardous Waste
+General Waste
+Other
+
+Return ONLY valid JSON with exactly these fields:
+
+{
+  "object_name": "specific object visible",
+  "category": "one allowed broad category",
+  "material": "main material or materials",
+  "reason": "one short explanation",
+  "disposal": "short safe disposal recommendation",
+  "reuse": "short reuse or repair recommendation",
+  "sustainability_tip": "one short sustainability tip"
+}
+
+Do not use markdown.
+Do not add text before or after the JSON.
+If the object cannot be identified reliably, use category "Other".
+"""
+
+    response = client.models.generate_content(
+        model="gemini-3.8-flash",
+        contents=[
+            prompt,
+            types.Part.from_bytes(
+                data=image_bytes,
+                mime_type="image/jpeg"
+            )
+        ],
+        config=types.GenerateContentConfig(
+            temperature=0.1,
+            response_mime_type="application/json"
+        )
+    )
+
+    text = response.text.strip()
+
+    return json.loads(text)
+
+
+# =========================================================
+# FINAL DECISION LOGIC
+# =========================================================
+
+def choose_final_result(
+    ml_label,
+    ml_confidence,
+    gemini_result
+):
+
+    ml_category = broad_mapping.get(
+        ml_label,
+        "Other"
+    )
+
+    # Gemini unavailable
+    if gemini_result is None:
+
+        return {
+            "source": "EfficientNetV2B0",
+            "object_name": ml_label.replace("_", " ").title(),
+            "category": ml_category,
+            "detailed_class": ml_label,
+            "confidence": ml_confidence
+        }
+
+    gemini_category = gemini_result.get(
+        "category",
+        "Other"
+    )
+
+    gemini_object = gemini_result.get(
+        "object_name",
+        "Unknown object"
+    )
+
+    # -------------------------------------------------
+    # Gemini detects something outside our 30 classes
+    # -------------------------------------------------
+
+    if gemini_category in [
+        "Electronic Waste",
+        "Hazardous Waste",
+        "General Waste",
+        "Other"
+    ]:
+
+        return {
+            "source": "Gemini Vision",
+            "object_name": gemini_object,
+            "category": gemini_category,
+            "detailed_class": None,
+            "confidence": None
+        }
+
+    # -------------------------------------------------
+    # Both systems agree on broad waste category
+    # -------------------------------------------------
+
+    if gemini_category == ml_category:
+
+        return {
+            "source": "Hybrid AI",
+            "object_name": gemini_object,
+            "category": gemini_category,
+            "detailed_class": ml_label,
+            "confidence": ml_confidence
+        }
+
+    # -------------------------------------------------
+    # They disagree
+    #
+    # Gemini gets priority for open-world object
+    # identification. EfficientNet result is still shown.
+    # -------------------------------------------------
+
+    return {
+        "source": "Gemini Vision",
+        "object_name": gemini_object,
+        "category": gemini_category,
+        "detailed_class": None,
+        "confidence": None
+    }
 
 
 # =========================================================
@@ -383,140 +625,319 @@ st.set_page_config(
 st.title("♻️ AI WasteWise")
 
 st.write(
-    "AI-powered waste classification, "
-    "explainability and sustainable waste-management guidance."
+    "Hybrid AI waste identification using "
+    "EfficientNetV2B0, Gemini Vision, Grad-CAM and RAG."
+)
+
+st.caption(
+    "Upload an object or waste image to identify its "
+    "waste category and receive disposal guidance."
 )
 
 st.divider()
 
 
 # =========================================================
-# IMAGE UPLOAD
+# FILE UPLOAD
 # =========================================================
 
 uploaded_file = st.file_uploader(
-    "Upload a waste image",
-    type=["jpg", "jpeg", "png"]
+    "📷 Upload an image",
+    type=[
+        "jpg",
+        "jpeg",
+        "png"
+    ]
 )
 
 
 # =========================================================
-# MAIN APPLICATION
+# MAIN APP
 # =========================================================
 
 if uploaded_file is not None:
 
-    image = tf.keras.utils.load_img(
-        uploaded_file,
-        target_size=(256, 256)
-    )
+    image = Image.open(
+        uploaded_file
+    ).convert("RGB")
 
     st.image(
         image,
-        caption="Uploaded Waste Image",
+        caption="Uploaded Image",
         use_container_width=True
     )
 
     if st.button(
         "🔍 Analyze Waste",
+        type="primary",
         use_container_width=True
     ):
 
+        # ---------------------------------------------
+        # CUSTOM MODEL
+        # ---------------------------------------------
+
         with st.spinner(
-            "AI WasteWise is analyzing the image..."
+            "Running AI WasteWise analysis..."
         ):
 
-            class_id, confidence, cam = (
-                predict_and_gradcam(image)
+            ml_label, ml_confidence, cam = (
+                efficientnet_prediction(image)
             )
 
-        label = classes[class_id]
+            # -----------------------------------------
+            # GEMINI
+            # -----------------------------------------
 
-        information = knowledge.get(
-            label,
-            (
-                "Unknown",
-                "Check local waste-management guidelines.",
-                "Consider safe reuse where appropriate.",
-                "Follow local disposal rules."
+            gemini_result = None
+
+            try:
+
+                gemini_result = gemini_analysis(
+                    image
+                )
+
+            except Exception as e:
+
+                st.warning(
+                    "Gemini visual verification was unavailable. "
+                    "The custom classifier result will still be shown."
+                )
+
+            # -----------------------------------------
+            # FINAL DECISION
+            # -----------------------------------------
+
+            final = choose_final_result(
+                ml_label,
+                ml_confidence,
+                gemini_result
             )
-        )
 
-        # ---------------------------------------------
-        # PREDICTION
-        # ---------------------------------------------
+        # =============================================
+        # FINAL RESULT
+        # =============================================
 
         st.success(
-            f"Detected Waste: "
-            f"{label.replace('_', ' ').title()}"
+            f"♻️ Waste Category: "
+            f"{final['category']}"
         )
 
-        st.metric(
-            "AI Confidence",
-            f"{confidence:.2%}"
+        st.subheader(
+            final["object_name"]
         )
 
-        # ---------------------------------------------
+        st.caption(
+            f"Final identification source: "
+            f"{final['source']}"
+        )
+
+        # =============================================
+        # CUSTOM MODEL RESULT
+        # =============================================
+
+        with st.expander(
+            "🧠 Custom EfficientNetV2B0 Analysis"
+        ):
+
+            st.write(
+                "**30-Class Prediction:**",
+                ml_label.replace(
+                    "_",
+                    " "
+                ).title()
+            )
+
+            st.write(
+                "**Model Confidence:** "
+                f"{ml_confidence:.2%}"
+            )
+
+            st.write(
+                "**Broad Category:**",
+                broad_mapping.get(
+                    ml_label,
+                    "Other"
+                )
+            )
+
+            st.caption(
+                "The custom model was trained specifically "
+                "on 30 household and recyclable waste classes."
+            )
+
+        # =============================================
+        # GEMINI RESULT
+        # =============================================
+
+        if gemini_result:
+
+            with st.expander(
+                "✨ Gemini Visual Verification",
+                expanded=True
+            ):
+
+                st.write(
+                    "**Object:**",
+                    gemini_result.get(
+                        "object_name",
+                        "Unknown"
+                    )
+                )
+
+                st.write(
+                    "**Category:**",
+                    gemini_result.get(
+                        "category",
+                        "Other"
+                    )
+                )
+
+                st.write(
+                    "**Material:**",
+                    gemini_result.get(
+                        "material",
+                        "Unknown"
+                    )
+                )
+
+                st.write(
+                    "**Why:**",
+                    gemini_result.get(
+                        "reason",
+                        ""
+                    )
+                )
+
+        # =============================================
         # GRAD-CAM
-        # ---------------------------------------------
+        # =============================================
 
         st.subheader(
             "🔥 Explainable AI — Grad-CAM"
         )
 
-        figure, axis = plt.subplots(
-            figsize=(7, 7)
+        resized_display = image.resize(
+            (256, 256)
         )
 
-        axis.imshow(image)
+        fig, ax = plt.subplots(
+            figsize=(6, 6)
+        )
 
-        axis.imshow(
+        ax.imshow(
+            resized_display
+        )
+
+        ax.imshow(
             cam,
             cmap="jet",
-            alpha=0.45
+            alpha=0.42
         )
 
-        axis.axis("off")
+        ax.axis(
+            "off"
+        )
 
-        axis.set_title(
-            f"{label.replace('_', ' ').title()} "
-            f"| {confidence:.2%}"
+        ax.set_title(
+            f"EfficientNet: "
+            f"{ml_label.replace('_', ' ').title()}"
         )
 
         st.pyplot(
-            figure,
+            fig,
             use_container_width=True
         )
 
-        plt.close(figure)
+        plt.close(
+            fig
+        )
 
-        # ---------------------------------------------
-        # RAG GUIDANCE
-        # ---------------------------------------------
+        st.caption(
+            "Grad-CAM explains the custom EfficientNet "
+            "classifier. If Gemini overrides the classification, "
+            "the heatmap still corresponds to the EfficientNet result."
+        )
+
+        # =============================================
+        # GUIDANCE
+        # =============================================
 
         st.subheader(
-            "♻️ RAG-Based Sustainability Guidance"
+            "🌱 Sustainability Guidance"
+        )
+
+        category = final[
+            "category"
+        ]
+
+        base_info = knowledge.get(
+            category,
+            knowledge["Other"]
+        )
+
+        # Prefer Gemini's object-specific guidance
+        # when available.
+
+        if gemini_result:
+
+            material = gemini_result.get(
+                "material",
+                base_info["material"]
+            )
+
+            disposal = gemini_result.get(
+                "disposal",
+                base_info["disposal"]
+            )
+
+            reuse = gemini_result.get(
+                "reuse",
+                base_info["reuse"]
+            )
+
+            tip = gemini_result.get(
+                "sustainability_tip",
+                base_info["tip"]
+            )
+
+        else:
+
+            material = base_info[
+                "material"
+            ]
+
+            disposal = base_info[
+                "disposal"
+            ]
+
+            reuse = base_info[
+                "reuse"
+            ]
+
+            tip = base_info[
+                "tip"
+            ]
+
+        st.write(
+            f"**Material:** {material}"
         )
 
         st.write(
-            f"**Material:** {information[0]}"
+            f"**🗑️ Disposal:** {disposal}"
         )
 
         st.write(
-            f"**Disposal:** {information[1]}"
+            f"**♻️ Reuse / Repair:** {reuse}"
         )
 
         st.write(
-            f"**Reuse:** {information[2]}"
+            f"**🌍 Sustainability Tip:** {tip}"
         )
 
-        st.write(
-            f"**Sustainability Tip:** {information[3]}"
-        )
-
-        # ---------------------------------------------
-        # SYSTEM PIPELINE
-        # ---------------------------------------------
+        # =============================================
+        # PIPELINE
+        # =============================================
 
         st.divider()
 
@@ -527,21 +948,22 @@ if uploaded_file is not None:
         st.write(
             "📷 Image → "
             "🧠 EfficientNetV2B0 → "
-            "🏷️ Classification → "
+            "✨ Gemini Visual Verification → "
             "🔥 Grad-CAM → "
-            "📚 RAG → "
-            "♻️ Sustainability Guidance"
+            "📚 RAG Knowledge → "
+            "♻️ Waste Guidance"
         )
 
         st.info(
-            "This guidance is informational. "
-            "Always follow local waste-management "
-            "rules for final disposal decisions."
+            "AI predictions and disposal guidance may not "
+            "always be correct. Follow your local waste-management "
+            "and e-waste regulations for final disposal."
         )
+
 
 else:
 
     st.info(
-        "👆 Upload a JPG, JPEG or PNG waste image "
-        "to start the analysis."
+        "👆 Upload a waste or household-object image "
+        "to begin."
     )
